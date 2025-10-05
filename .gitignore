@@ -1,0 +1,28 @@
+# Binarios
+*.exe
+*.dll
+*.so
+*.dylib
+server
+main
+
+# Test
+*.test
+*.out
+
+# Temporal
+tmp/
+.air/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vendor (opcional, solo si no usas vendoring)
+# vendor/

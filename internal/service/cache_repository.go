@@ -1,36 +1,28 @@
 package service
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
+	"time"
 
-	"github.com/valkey-io/valkey-glide/go/api"
+	"github.com/valkey-io/valkey-go"
 )
-
-// ValkeyClient es nuestra interfaz común que funciona para ambos modos
-type ValkeyClient interface {
-	Set(key string, value string) (string, error)
-	Get(key string) (api.Result[string], error)
-	Del(keys []string) (int64, error)
-	Exists(keys []string) (int64, error)
-	Expire(key string, seconds int64) (bool, error)
-	Ping() (string, error)
-	Close()
-}
 
 // RepositoryConfig contiene la configuración del repository
 type RepositoryConfig struct {
 	Host           string
 	Port           int
 	Password       string
-	IsCluster      bool
+	UseTLS         bool
 	RequestTimeout int
 	ClientName     string
 }
 
 // CacheRepository maneja las operaciones con Valkey
 type CacheRepository struct {
-	client ValkeyClient // ← Usamos nuestra interfaz
+	client valkey.Client
 }
 
 // NewCacheRepository crea un nuevo repositorio conectado a Valkey
@@ -39,48 +31,44 @@ func NewCacheRepository(config RepositoryConfig) (*CacheRepository, error) {
 		return nil, fmt.Errorf("password is required")
 	}
 
-	var client ValkeyClient
-	var err error
+	log.Printf("🔧 RepositoryConfig: %+v", config)
 
-	client, err = createClusterClient(config)
-
-	if err != nil {
-		return nil, err
+	// Construir opciones del cliente
+	options := valkey.ClientOption{
+		InitAddress: []string{fmt.Sprintf("%s:%d", config.Host, config.Port)},
+		Password:    config.Password,
+		ClientName:  config.ClientName,
 	}
 
-	// Probar conexión
-	result, err := client.Ping()
+	// Configurar TLS si está habilitado
+	if config.UseTLS {
+		options.TLSConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, // Para ElastiCache con certificados autofirmados
+		}
+	}
+
+	// Crear cliente
+	client, err := valkey.NewClient(options)
 	if err != nil {
+		return nil, fmt.Errorf("error creando cliente: %w", err)
+	}
+
+	// Probar conexión con PING
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
 		client.Close()
-		return nil, fmt.Errorf("error en ping a Valkey: %w", err)
+		return nil, fmt.Errorf("error en ping: %w", err)
 	}
 
-	mode := "Cluster"
-
-	log.Printf("✅ Repository conectado a Valkey %s en %s:%d (PING: %s, TLS: enabled)",
-		mode, config.Host, config.Port, result)
+	log.Printf("✅ Repository conectado a Valkey Standalone en %s:%d (TLS: %v)",
+		config.Host, config.Port, config.UseTLS)
 
 	return &CacheRepository{
 		client: client,
 	}, nil
-}
-
-// createClusterClient crea un cliente para modo Cluster con TLS
-func createClusterClient(config RepositoryConfig) (ValkeyClient, error) {
-	clientConfig := api.NewGlideClusterClientConfiguration().
-		WithAddress(&api.NodeAddress{Host: config.Host, Port: config.Port}).
-		WithCredentials(api.NewServerCredentialsWithDefaultUsername(config.Password)).
-		WithUseTLS(true)
-
-	if config.RequestTimeout > 0 {
-		clientConfig = clientConfig.WithRequestTimeout(config.RequestTimeout)
-	}
-
-	if config.ClientName != "" {
-		clientConfig = clientConfig.WithClientName(config.ClientName)
-	}
-
-	return api.NewGlideClusterClient(clientConfig)
 }
 
 // Set guarda un valor con TTL opcional
@@ -89,16 +77,20 @@ func (r *CacheRepository) Set(key string, value string, ttlSeconds int64) error 
 		return fmt.Errorf("key cannot be empty")
 	}
 
-	_, err := r.client.Set(key, value)
-	if err != nil {
-		return fmt.Errorf("error en Set: %w", err)
+	ctx := context.Background()
+
+	// Construir comando SET
+	var cmd valkey.Completed
+	if ttlSeconds > 0 {
+		// SET key value EX seconds
+		cmd = r.client.B().Set().Key(key).Value(value).ExSeconds(ttlSeconds).Build()
+	} else {
+		// SET key value
+		cmd = r.client.B().Set().Key(key).Value(value).Build()
 	}
 
-	if ttlSeconds > 0 {
-		_, err = r.client.Expire(key, ttlSeconds)
-		if err != nil {
-			return fmt.Errorf("error configurando TTL: %w", err)
-		}
+	if err := r.client.Do(ctx, cmd).Error(); err != nil {
+		return fmt.Errorf("error en Set: %w", err)
 	}
 
 	return nil
@@ -110,19 +102,25 @@ func (r *CacheRepository) Get(key string) (string, bool, error) {
 		return "", false, fmt.Errorf("key cannot be empty")
 	}
 
-	result, err := r.client.Get(key)
+	ctx := context.Background()
+
+	// Ejecutar GET
+	result := r.client.Do(ctx, r.client.B().Get().Key(key).Build())
+
+	// Si es nil (key no existe), retornar found=false
+	if valkey.IsValkeyNil(result.Error()) {
+		return "", false, nil
+	}
+
+	// Si hay otro error
+	if err := result.Error(); err != nil {
+		return "", false, err
+	}
+
+	// Obtener el valor
+	value, err := result.ToString()
 	if err != nil {
-		return "", false, nil
-	}
-
-	if result.IsNil() {
-		return "", false, nil
-	}
-
-	value := result.Value()
-
-	if value == "" {
-		return "", false, nil
+		return "", false, err
 	}
 
 	return value, true, nil
@@ -134,8 +132,9 @@ func (r *CacheRepository) Delete(key string) error {
 		return fmt.Errorf("key cannot be empty")
 	}
 
-	_, err := r.client.Del([]string{key})
-	if err != nil {
+	ctx := context.Background()
+
+	if err := r.client.Do(ctx, r.client.B().Del().Key(key).Build()).Error(); err != nil {
 		return fmt.Errorf("error en Delete: %w", err)
 	}
 
@@ -148,7 +147,9 @@ func (r *CacheRepository) Exists(key string) (bool, error) {
 		return false, fmt.Errorf("key cannot be empty")
 	}
 
-	count, err := r.client.Exists([]string{key})
+	ctx := context.Background()
+
+	count, err := r.client.Do(ctx, r.client.B().Exists().Key(key).Build()).AsInt64()
 	if err != nil {
 		return false, fmt.Errorf("error en Exists: %w", err)
 	}

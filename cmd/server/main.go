@@ -14,25 +14,21 @@ import (
 )
 
 func main() {
-	// Leer configuración desde variables de entorno
+	// Configuración desde variables de entorno
 	valkeyHost := getEnv("VALKEY_HOST", "localhost")
 	valkeyPort := getEnvAsInt("VALKEY_PORT", 6379)
-	valkeyPassword := os.Getenv("VALKEY_PASSWORD") // Obligatorio
-
-	// Validar password
-	if valkeyPassword == "" {
-		log.Fatal("❌ VALKEY_PASSWORD es requerido")
-	}
+	valkeyPassword := getEnv("VALKEY_PASSWORD", "dummy")
+	valkeyUseTLS := getEnv("VALKEY_USE_TLS", "false") == "true" // ← NUEVO
 
 	// Crear configuración del repository
 	repoConfig := service.RepositoryConfig{
 		Host:           valkeyHost,
 		Port:           valkeyPort,
 		Password:       valkeyPassword,
+		UseTLS:         valkeyUseTLS, // ← AGREGAR ESTO
 		RequestTimeout: 5000,
 		ClientName:     "grpc-cache-service",
 	}
-
 	// Crear repository
 	repo, err := service.NewCacheRepository(repoConfig)
 	if err != nil {
