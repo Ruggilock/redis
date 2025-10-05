@@ -1,0 +1,30 @@
+# Binarios
+server
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test y temporal
+*.test
+*.out
+tmp/
+
+# Cliente de prueba
+client-test/
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Documentación
+*.md
+README.md
+
+# Air (hot reload)
+.air.toml
