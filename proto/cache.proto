@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package cache;
+
+option go_package = "github.com/Ruggilock/redis/proto";
+
+
+// Servicio de Cache similar a Redis
+service CacheService {
+  // Guardar un valor
+  rpc Set(SetRequest) returns (SetResponse);
+  
+  // Obtener un valor
+  rpc Get(GetRequest) returns (GetResponse);
+  
+  // Eliminar un valor
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  
+  // Verificar si existe una key
+  rpc Exists(ExistsRequest) returns (ExistsResponse);
+}
+
+// Mensajes para Set
+message SetRequest {
+  string key = 1;
+  string value = 2;
+  int64 ttl_seconds = 3; // Tiempo de expiración en segundos (0 = sin expiración)
+}
+
+message SetResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Mensajes para Get
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bool found = 1;
+  string value = 2;
+}
+
+// Mensajes para Delete
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+
+// Mensajes para Exists
+message ExistsRequest {
+  string key = 1;
+}
+
+message ExistsResponse {
+  bool exists = 1;
+}
